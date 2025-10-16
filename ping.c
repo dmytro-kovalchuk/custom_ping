@@ -40,7 +40,7 @@ struct Options parse_arguments(int argc, char* argv[]) {
 	while ((curr_option = getopt_long(argc, argv, "hs:c:t:", option_array, NULL)) != -1) {
 		switch (curr_option) {
 			case 'h':
-				printf("Usage: %s [-s size] [-c count] [-t ttl] destination\n", argv[0]);
+				printf("Usage: sudo %s [-s size] [-c count] [-t ttl] destination\n", argv[0]);
 				puts("	-h, --help		Show this help message");	
 				puts("	-s, --size		Set number of bytes in ICMP packet(min 64 bytes, max 1024 bytes)");	
 				puts("	-c, --count		Set number of packets");	
