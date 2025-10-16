@@ -9,9 +9,10 @@
 #include <getopt.h>
 #include <time.h>
 
-#define STANDART_ICMP_PACKET_SIZE 64
-#define STANDART_PACKETS_COUNT 4
-#define STANDART_TIME_TO_LIVE 128
+#define DEFAULT_ICMP_PACKET_SIZE 64
+#define DEFAULT_PACKETS_COUNT 4
+#define DEFAULT_TIME_TO_LIVE 128
+#define DEFAULT_TIMEOUT_IN_SEC 3
 
 struct Options {
 	uint16_t icmp_packet_size;
@@ -21,9 +22,9 @@ struct Options {
 
 struct Options parse_arguments(int argc, char* argv[]) {
 	struct Options options = {
-		.icmp_packet_size = STANDART_ICMP_PACKET_SIZE,
-		.packets_count = STANDART_PACKETS_COUNT,
-		.time_to_live = STANDART_TIME_TO_LIVE
+		.icmp_packet_size = DEFAULT_ICMP_PACKET_SIZE,
+		.packets_count = DEFAULT_PACKETS_COUNT,
+		.time_to_live = DEFAULT_TIME_TO_LIVE
 	};
 
 	const struct option option_array[] = {
@@ -96,6 +97,32 @@ struct sockaddr_in get_ip_address(const char* input) {
 	return socket_addr;
 }
 
+uint16_t create_socket() {
+	uint16_t socket_fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
+
+	if (socket_fd < 0) {
+		perror("socket");
+		exit(EXIT_FAILURE);
+	}
+
+	return socket_fd;
+}
+
+void set_socket_timeout(int socket_fd) {
+	struct timeval timeout = {DEFAULT_TIMEOUT_IN_SEC, 0};
+	if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1) {
+		perror("sersockopt SO_RCVTIMEO");
+		exit(EXIT_FAILURE);
+	}
+}
+
+void set_socket_ttl(int socket_fd, uint8_t time_to_live) {
+	if (setsockopt(socket_fd, IPPROTO_IP, IP_TTL, &time_to_live, sizeof(time_to_live)) == -1) {
+		perror("setsockopt IP_TTL");
+		exit(EXIT_FAILURE);
+	}
+}
+
 uint16_t checksum(void* buffer, size_t len) {
 	uint16_t* word_ptr = buffer;
 	uint32_t sum = 0;
@@ -114,6 +141,24 @@ uint16_t checksum(void* buffer, size_t len) {
 	return (uint16_t)~sum;
 }
 
+void set_packet_fields(char* send_packet, struct icmphdr* icmp_header, uint16_t icmp_packet_size, uint8_t sequence_num) {
+	icmp_header = (struct icmphdr*) send_packet;
+	icmp_header->type = ICMP_ECHO;
+	icmp_header->code = 0;
+	icmp_header->un.echo.id = htons(getpid() & 0xFFFF);
+	icmp_header->un.echo.sequence = htons(sequence_num);
+	memset(send_packet + sizeof(struct icmphdr), 0xFF, icmp_packet_size - sizeof(struct icmphdr));
+	icmp_header->checksum = 0;
+	icmp_header->checksum = checksum(send_packet, icmp_packet_size);
+}
+
+char* get_src_ip_address(char* packet) {
+	struct iphdr* ip_header = (struct iphdr*) packet;
+	char* src_ip_addr = malloc(INET_ADDRSTRLEN);
+	inet_ntop(AF_INET, &(ip_header->saddr), src_ip_addr, INET_ADDRSTRLEN);
+	return src_ip_addr;
+}
+
 int get_ttl_from_packet(char* packet) {
 	struct iphdr* ip_header = (struct iphdr*) packet;
 	return ip_header->ttl;
@@ -129,48 +174,28 @@ int main(int argc, char* argv[]) {
 
 	struct sockaddr_in socket_addr = get_ip_address(argv[optind]);
 	
-	int socket_fd = socket(AF_INET, SOCK_RAW, IPPROTO_ICMP);
-	if (socket_fd < 0) {
-		perror("socket");
-		exit(EXIT_FAILURE);
-	}
-
-	struct timeval timeout = {3, 0};
-	if (setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout))) {
-		perror("sersockopt SO_RCVTIMEO");
-		exit(EXIT_FAILURE);
-	}
-
-	if (setsockopt(socket_fd, IPPROTO_IP, IP_TTL, &options.time_to_live, sizeof(options.time_to_live))) {
-		perror("setsockopt IP_TTL");
-		exit(EXIT_FAILURE);
-	}
+	uint16_t socket_fd = create_socket();
+	set_socket_timeout(socket_fd);
+	set_socket_ttl(socket_fd, options.time_to_live);
 	
-	char send_buffer[1024];
+	char send_packet[1024];
 	struct icmphdr *icmp_header;
 
-	for (int i = 0; i < options.packets_count; i++) {
-		icmp_header = (struct icmphdr*) send_buffer;
-		icmp_header->type = ICMP_ECHO;
-		icmp_header->code = 0;
-		icmp_header->un.echo.id = htons(getpid() & 0xFFFF);
-		icmp_header->un.echo.sequence = htons(i);
-		memset(send_buffer + sizeof(struct icmphdr), 0xFF, options.icmp_packet_size - sizeof(struct icmphdr));
-		icmp_header->checksum = 0;
-		icmp_header->checksum = checksum(send_buffer, options.icmp_packet_size);
+	for (uint8_t i = 0; i < options.packets_count; i++) {
+		set_packet_fields(send_packet, icmp_header, options.icmp_packet_size, i);
 
 		struct timespec sending_time, receiving_time;
 		clock_gettime(CLOCK_MONOTONIC, &sending_time);
 		
-		if (sendto(socket_fd, send_buffer, options.icmp_packet_size, 0, (struct sockaddr*)&socket_addr, sizeof(socket_addr)) < 0) {
+		if (sendto(socket_fd, send_packet, options.icmp_packet_size, 0, (struct sockaddr*)&socket_addr, sizeof(socket_addr)) < 0) {
 			perror("sendto");
 			continue;
 		}
 		
 		struct sockaddr_in reply_addr;
-		char buffer[1024];
+		char received_packet[1024];
 		socklen_t reply_addr_len = sizeof(reply_addr);
-		ssize_t bytes = recvfrom(socket_fd, buffer, sizeof(buffer), 0, (struct sockaddr*)&reply_addr, &reply_addr_len);
+		ssize_t bytes = recvfrom(socket_fd, received_packet, sizeof(received_packet), 0, (struct sockaddr*)&reply_addr, &reply_addr_len);
 			
 		if (bytes <= 0) {
         	perror("recvfrom");
@@ -179,11 +204,13 @@ int main(int argc, char* argv[]) {
 
 		clock_gettime(CLOCK_MONOTONIC, &receiving_time);
 
+		char* src_ip_addr = get_src_ip_address(received_packet);
 		printf("PING: sent %d bytes to %s\n", options.icmp_packet_size, argv[optind]);
-		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", bytes, argv[optind], get_ttl_from_packet(buffer), calculate_round_time_trip(sending_time, receiving_time));	
+		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", bytes, src_ip_addr, get_ttl_from_packet(received_packet), calculate_round_time_trip(sending_time, receiving_time));
+		free(src_ip_addr);
 	}
-
 
 	close(socket_fd);
 	return EXIT_SUCCESS;
 }
+
