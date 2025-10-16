@@ -8,6 +8,7 @@
 #include <netdb.h>
 #include <getopt.h>
 #include <time.h>
+#include <errno.h>
 
 #define DEFAULT_ICMP_PACKET_SIZE 64
 #define DEFAULT_PACKETS_COUNT 4
@@ -212,6 +213,11 @@ int main(int argc, char* argv[]) {
 		ssize_t bytes = recvfrom(socket_fd, received_packet, sizeof(received_packet), 0, (struct sockaddr*)&reply_addr, &reply_addr_len);
 			
 		if (bytes <= 0) {
+			if (errno == EAGAIN || errno == EWOULDBLOCK) {
+				puts("Request timed out! Exiting...");
+				exit(EXIT_FAILURE);
+			}
+
         	perror("recvfrom");
 			continue;
 		}
