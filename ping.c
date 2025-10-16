@@ -114,6 +114,11 @@ uint16_t checksum(void* buffer, size_t len) {
 	return (uint16_t)~sum;
 }
 
+int get_ttl_from_packet(char* packet) {
+	struct iphdr* ip_header = (struct iphdr*) packet;
+	return ip_header->ttl;
+}
+
 double calculate_round_time_trip(struct timespec sending_time, struct timespec receiving_time) {
 	return (double)(receiving_time.tv_sec - sending_time.tv_sec) * 1000.0 +
 			(double)(receiving_time.tv_nsec - sending_time.tv_nsec) / 1000000.0;
@@ -175,7 +180,7 @@ int main(int argc, char* argv[]) {
 		clock_gettime(CLOCK_MONOTONIC, &receiving_time);
 
 		printf("PING: sent %d bytes to %s\n", options.icmp_packet_size, argv[optind]);
-		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", bytes, argv[optind], -1, calculate_round_time_trip(sending_time, receiving_time));	
+		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", bytes, argv[optind], get_ttl_from_packet(buffer), calculate_round_time_trip(sending_time, receiving_time));	
 	}
 
 
