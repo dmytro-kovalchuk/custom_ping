@@ -169,6 +169,20 @@ double calculate_round_time_trip(struct timespec sending_time, struct timespec r
 			(double)(receiving_time.tv_nsec - sending_time.tv_nsec) / 1000000.0;
 }
 
+void print_icmp_message(char* sender_ip_address, char* received_packet, uint8_t packet_size, double round_time_trip) {
+	printf("PING: sent %d bytes to %s\n", packet_size, sender_ip_address);
+	
+	struct icmphdr* recv_icmp = (struct icmphdr*)(received_packet + sizeof(struct iphdr));
+	char* src_ip_addr = get_src_ip_address(received_packet);
+	if (recv_icmp->type == ICMP_ECHOREPLY) {
+		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", sizeof(received_packet), src_ip_addr, get_ttl_from_packet(received_packet), round_time_trip);
+	} else if (recv_icmp->type == ICMP_TIME_EXCEEDED) {
+		printf("PONG: packet was dropped due to TTL\n\n");
+	}
+
+	free(src_ip_addr);	
+}
+
 int main(int argc, char* argv[]) {
 	struct Options options = parse_arguments(argc, argv);
 
@@ -203,11 +217,9 @@ int main(int argc, char* argv[]) {
 		}
 
 		clock_gettime(CLOCK_MONOTONIC, &receiving_time);
+				
+		print_icmp_message(argv[optind], received_packet, options.icmp_packet_size, calculate_round_time_trip(sending_time, receiving_time));	
 
-		char* src_ip_addr = get_src_ip_address(received_packet);
-		printf("PING: sent %d bytes to %s\n", options.icmp_packet_size, argv[optind]);
-		printf("PONG: received %ld bytes from %s, ttl=%d, round-trip time %.2f ms\n\n", bytes, src_ip_addr, get_ttl_from_packet(received_packet), calculate_round_time_trip(sending_time, receiving_time));
-		free(src_ip_addr);
 	}
 
 	close(socket_fd);
